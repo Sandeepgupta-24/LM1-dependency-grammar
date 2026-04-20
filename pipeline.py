@@ -210,39 +210,57 @@ def load_model(model_name=DEFAULT_MODEL):
 
 def align_attention_to_words(subword_attn, word_ids, n_words):
     """
-    Average subword-level attention to produce a word-level matrix.
+    Average subword-level attention to produce a word-level matrix,
+    **preserving the [CLS] token as a ROOT proxy** at index 0.
 
-    For each ordered word pair (w_i, w_j) the word-level attention is
+    The returned matrix has shape (n_words + 1, n_words + 1) where:
+      - Row / column 0 corresponds to the [CLS] token  (≡ ROOT)
+      - Rows / columns 1 … n_words correspond to actual words
 
-        A_word(w_i, w_j)  =  (1 / |S_i| |S_j|)
-                              Σ_{s ∈ S_i}  Σ_{t ∈ S_j}  A_sub(s, t)
+    For each pair of slots (a, b) the aggregated attention is
 
-    where S_i is the set of subword indices belonging to word w_i.
+        A_out(a, b)  =  mean_{s ∈ slots(a), t ∈ slots(b)}  A_sub(s, t)
+
+    where ``slots(0)`` = {subword positions with word_id == None AND
+    position == 0}  (i.e. [CLS]),  and ``slots(k)`` for k ≥ 1 is the
+    set of subword positions whose word_id == k - 1.
 
     Parameters
     ----------
     subword_attn : np.ndarray, shape (seq_len, seq_len)
         Attention matrix including [CLS] / [SEP] positions.
     word_ids     : list[int | None]
-        Mapping from each subword position to word index (None = special token).
+        Mapping from each subword position to word index (None = special).
     n_words      : int
-        Number of words in the prefix.
+        Number of real words in the prefix.
 
     Returns
     -------
-    np.ndarray, shape (n_words, n_words)
+    np.ndarray, shape (n_words + 1, n_words + 1)
+        Index 0 = [CLS] / ROOT;  indices 1..n_words = words.
     """
-    word_attn = np.zeros((n_words, n_words), dtype=np.float64)
-    counts    = np.zeros((n_words, n_words), dtype=np.float64)
+    dim       = n_words + 1          # slot 0 = [CLS], slots 1..n_words = words
+    word_attn = np.zeros((dim, dim), dtype=np.float64)
+    counts    = np.zeros((dim, dim), dtype=np.float64)
+
+    def _slot(pos, wid):
+        """Map a subword position to its slot in the output matrix."""
+        if wid is not None and wid < n_words:
+            return wid + 1                    # word slot (1-based)
+        if pos == 0:                          # [CLS] token
+            return 0
+        return -1                             # [SEP] / pad — skip
 
     for i, wi in enumerate(word_ids):
-        if wi is None or wi >= n_words:
+        si = _slot(i, wi)
+        if si < 0:
             continue
         for j, wj in enumerate(word_ids):
-            if wj is None or wj >= n_words:
+            sj = _slot(j, wj)
+            if sj < 0:
                 continue
-            word_attn[wi, wj] += subword_attn[i, j]
-            counts[wi, wj]    += 1
+            word_attn[si, sj] += subword_attn[i, j]
+            counts[si, sj]    += 1
 
     nonzero = counts > 0
     word_attn[nonzero] /= counts[nonzero]
@@ -262,7 +280,8 @@ def extract_prefix_attentions(tokens, tokenizer, model, device):
     -------
     list[dict]  –  each dict contains
         'length'           : int                     prefix length t
-        'layer_attentions' : list[np.ndarray]        one (t, t) matrix per layer
+        'layer_attentions' : list[np.ndarray]        one (t+1, t+1) matrix per layer
+                             (slot 0 = [CLS]/ROOT;  slots 1..t = words)
     """
     n = len(tokens)
     results = []
@@ -296,6 +315,7 @@ def extract_prefix_attentions(tokens, tokenizer, model, device):
             attn_l = outputs.attentions[l_idx]               # (1, H, S, S)
             avg_attn = attn_l.mean(dim=1).squeeze(0)         # (S, S)
             avg_attn = avg_attn.cpu().numpy()
+            # Returns (t+1, t+1) matrix: row/col 0 = [CLS]/ROOT
             word_attn = align_attention_to_words(avg_attn, word_ids, t)
             layer_word_attns.append(word_attn)
 
@@ -316,68 +336,102 @@ def build_dependency_tree(attn_matrix):
     Construct a dependency tree from a word-level attention matrix using
     the Chu-Liu / Edmonds **maximum** spanning arborescence algorithm.
 
+    The input matrix has shape (n_words + 1, n_words + 1) where index 0
+    is the [CLS] token acting as a ROOT proxy (per Clark et al., 2019).
+    Word indices in the returned dict are 0-based (word 0 = first real
+    word), and head = -1 denotes attachment to ROOT.
+
     Interpretation
     --------------
-    A[i, j] = attention from word i to word j.
-    High A[i, j] ⟹ word j is likely the *head* of word i.
-
-    A virtual ROOT node is added; each word can attach to ROOT.
-    We negate all weights and solve the *minimum* spanning arborescence
-    (equivalent to maximising the original weights).
+    A[i, j] = attention from slot i to slot j.
+    High A[i, j] ⟹ slot j is likely the *head* of slot i.
+    A[0, :] contains the ROOT ([CLS]) → word attention distribution.
 
     Parameters
     ----------
-    attn_matrix : np.ndarray, shape (n, n)
+    attn_matrix : np.ndarray, shape (n_words + 1, n_words + 1)
+        Index 0 = [CLS] / ROOT;  indices 1..n_words = real words.
 
     Returns
     -------
-    dict  {word_idx: head_idx}   head_idx = -1 denotes ROOT attachment
+    dict  {word_idx: head_idx}   (0-based words; head_idx = -1 ⟹ ROOT)
     """
     import networkx as nx
 
-    n = attn_matrix.shape[0]
+    dim     = attn_matrix.shape[0]           # n_words + 1
+    n_words = dim - 1                        # number of real words
 
-    # --- trivial cases ---
-    if n == 1:
+    # --- trivial cases (0 or 1 real word) ---
+    if n_words <= 0:
+        return {}
+    if n_words == 1:
         return {0: -1}
-    if n == 2:
-        return {0: -1, 1: 0}
 
-    root_node = n                            # virtual ROOT id
+    # Build directed graph.  Node ids:
+    #   0 … n_words-1   =  real words
+    #   n_words          =  virtual ROOT (mapped from [CLS] slot 0)
+    root_node = n_words
     G = nx.DiGraph()
 
-    # Edges ROOT → word_i   (weight = mean column attention ≈ "root-ness")
-    for i in range(n):
-        root_wt = float(np.mean(attn_matrix[:, i]))
-        G.add_edge(root_node, i, weight=-root_wt)        # negate
+    # Edges ROOT → word_i  using *actual* [CLS] attention (row 0)
+    for wi in range(n_words):
+        # attn_matrix[slot_word, slot_CLS] = how much word wi attends to [CLS]
+        # We use this as the "ROOT → wi" edge weight (the word looks at ROOT)
+        cls_to_word = float(attn_matrix[wi + 1, 0])      # word attends to [CLS]
+        G.add_edge(root_node, wi, weight=-cls_to_word)    # negate for min-arb
 
-    # Edges word_j → word_i   (j is head of i; weight = A[i, j])
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                G.add_edge(j, i, weight=-float(attn_matrix[i, j]))
+    # Edges word_j → word_i  (j is head of i;  weight = A[i+1, j+1])
+    for wi in range(n_words):
+        for wj in range(n_words):
+            if wi != wj:
+                G.add_edge(wj, wi,
+                           weight=-float(attn_matrix[wi + 1, wj + 1]))
 
     try:
         arb = nx.minimum_spanning_arborescence(G, attr="weight")
         heads = {}
         for u, v in arb.edges():
             heads[v] = -1 if u == root_node else u
-        for i in range(n):
-            if i not in heads:
-                heads[i] = -1
+        # Safety: any word not in the arborescence gets ROOT
+        for wi in range(n_words):
+            if wi not in heads:
+                heads[wi] = -1
         return heads
     except nx.NetworkXException:
         return _argmax_heads(attn_matrix)
 
 
 def _argmax_heads(attn_matrix):
-    """Fallback: assign each word its highest-attention target as head."""
-    n = attn_matrix.shape[0]
-    heads = {0: -1}
-    for i in range(1, n):
-        scores    = attn_matrix[i].copy()
-        scores[i] = -np.inf                 # prevent self-loop
-        heads[i]  = int(np.argmax(scores))
+    """
+    Language-agnostic fallback: assign each word its highest-attention
+    head, and pick the ROOT dynamically (the word that attends most
+    strongly to the [CLS] token, i.e. slot 0).
+
+    Parameters
+    ----------
+    attn_matrix : np.ndarray, shape (n_words + 1, n_words + 1)
+        Index 0 = [CLS] / ROOT;  indices 1..n_words = real words.
+    """
+    dim     = attn_matrix.shape[0]
+    n_words = dim - 1
+
+    if n_words <= 0:
+        return {}
+    if n_words == 1:
+        return {0: -1}
+
+    # Dynamically choose ROOT: the word with the strongest attention to [CLS]
+    cls_attn = attn_matrix[1:, 0]            # shape (n_words,)
+    root_word = int(np.argmax(cls_attn))     # 0-based word index
+
+    heads = {root_word: -1}
+    for wi in range(n_words):
+        if wi == root_word:
+            continue
+        # Candidate heads: all other words (in word-word submatrix)
+        scores    = attn_matrix[wi + 1, 1:].copy()   # attention to each word
+        scores[wi] = -np.inf                          # prevent self-loop
+        heads[wi]  = int(np.argmax(scores))
     return heads
 
 

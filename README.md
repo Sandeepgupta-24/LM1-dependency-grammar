@@ -35,7 +35,7 @@ We extract layer-wise attention matrices from **mBERT** (bert-base-multilingual-
 │   ├── fig2_language_comparison.png
 │   ├── fig3_layer_analysis.png
 │   └── fig4_depth_change.png
-├── Project-dependency-grammar-built-by-LLMs.pdf   # Reference paper
+├── Project-dependency-grammar-built-by-LLMs.pdf    # Reference paper
 ├── PROPOSAL_SANDEEP_KUMAR_GUPTA_240928.pdf         # Project proposal
 └── Voita-et-al.pdf                                 # Reference paper
 ```
@@ -44,7 +44,7 @@ We extract layer-wise attention matrices from **mBERT** (bert-base-multilingual-
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/LM1-dependency-grammar.git
+git clone https://github.com/Sandeepgupta-24/LM1-dependency-grammar.git
 cd LM1-dependency-grammar
 
 # 2. Install dependencies
