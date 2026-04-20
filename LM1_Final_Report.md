@@ -55,51 +55,51 @@ For each language we sample up to 100 sentences with word counts between 5 and 2
 
 ### 3.2 Attention Extraction
 
-We use **bert-base-multilingual-cased** (Devlin et al., 2019) to ensure a single model processes all four languages under identical parameters. For a sentence of $n$ words $w_1, w_2, \ldots, w_n$, we construct prefix sequences $S_t = (w_1, \ldots, w_t)$ for $t = 2, 3, \ldots, n$.
+We use **bert-base-multilingual-cased** (Devlin et al., 2019) to ensure a single model processes all four languages under identical parameters. For a sentence of *n* words w₁, w₂, …, wₙ, we construct prefix sequences S_t = (w₁, …, w_t) for t = 2, 3, …, n.
 
-Each prefix $S_t$ is tokenized into subword units and fed through the model. Let $A^{(l,h)} \in \mathbb{R}^{s \times s}$ denote the attention matrix at layer $l$ and head $h$, where $s$ is the subword sequence length. We aggregate across the $H$ attention heads within each layer by averaging:
+Each prefix S_t is tokenized into subword units and fed through the model. Let A⁽ˡ˒ʰ⁾ ∈ ℝˢˣˢ denote the attention matrix at layer *l* and head *h*, where *s* is the subword sequence length. We aggregate across the *H* attention heads within each layer by averaging:
 
-$$\bar{A}^{(l)}_{i,j} \;=\; \frac{1}{H} \sum_{h=1}^{H} A^{(l,h)}_{i,j}$$
+> **Ā⁽ˡ⁾(i,j)  =  (1 / H) × Σ [h = 1 to H]  A⁽ˡ˒ʰ⁾(i,j)**
 
 Because mBERT uses subword tokenization (WordPiece), we must **align subword attention to word-level attention**. Crucially, we **preserve the [CLS] token** as a proxy for the linguistic ROOT node, following standard practice in transformer analysis (Clark et al., 2019). The [CLS] token attends globally to the sentence and receives global attention in return, making it a natural stand-in for the virtual ROOT of a dependency tree.
 
-The alignment produces a $(t+1) \times (t+1)$ matrix where slot 0 corresponds to [CLS]/ROOT and slots $1, \ldots, t$ correspond to the $t$ words in the prefix. For each pair of slots $(a, b)$:
+The alignment produces a (t+1) × (t+1) matrix where slot 0 corresponds to [CLS]/ROOT and slots 1, …, t correspond to the *t* words in the prefix. For each pair of slots (a, b):
 
-$$A_{\text{out}}(a, b) \;=\; \frac{1}{|\mathcal{S}_a|\;|\mathcal{S}_b|} \sum_{s \in \mathcal{S}_a} \sum_{t \in \mathcal{S}_b} \bar{A}^{(l)}_{s,t}$$
+> **A_out(a, b)  =  (1 / |𝒮_a| · |𝒮_b|) × Σ [s ∈ 𝒮_a]  Σ [t ∈ 𝒮_b]  Ā⁽ˡ⁾(s,t)**
 
-where $\mathcal{S}_0$ is the singleton set containing the [CLS] subword position, and $\mathcal{S}_k$ (for $k \geq 1$) is the set of subword indices belonging to word $w_k$. The [SEP] token and any padding are excluded.
+where 𝒮₀ is the singleton set containing the [CLS] subword position, and 𝒮_k (for k ≥ 1) is the set of subword indices belonging to word w_k. The [SEP] token and any padding are excluded.
 
 ### 3.3 Tree Construction — Chu-Liu / Edmonds Algorithm
 
 We interpret the word-level attention as a weighted directed graph and extract the **maximum spanning arborescence** — the directed tree rooted at the [CLS] node (ROOT proxy) that maximises total attention weight.
 
-The ROOT-to-word edge weights are derived directly from the [CLS] column of the attention matrix: $A_{\text{out}}(w_i, \text{[CLS]})$ — i.e., how strongly word $w_i$ attends to the [CLS] token. A high value indicates that the word "looks to" ROOT, making it a likely ROOT-attached word. This is linguistically motivated: in standard dependency grammar, the main verb of the sentence attaches directly to ROOT. Word-to-word edge weights are taken from the word submatrix $A_{\text{out}}(w_i, w_j)$ for $i \neq j$.
+The ROOT-to-word edge weights are derived directly from the [CLS] column of the attention matrix: A_out(wᵢ, [CLS]) — i.e., how strongly word wᵢ attends to the [CLS] token. A high value indicates that the word "looks to" ROOT, making it a likely ROOT-attached word. This is linguistically motivated: in standard dependency grammar, the main verb of the sentence attaches directly to ROOT. Word-to-word edge weights are taken from the word submatrix A_out(wᵢ, wⱼ) for i ≠ j.
 
-Formally, let $\mathcal{T}_{\text{ROOT}}$ denote the set of all directed spanning trees rooted at [CLS]. We solve:
+Formally, let 𝒯_ROOT denote the set of all directed spanning trees rooted at [CLS]. We solve:
 
-$$T^{*} \;=\; \arg\max_{T \in \mathcal{T}_{\text{ROOT}}} \;\sum_{(j \to i) \in T} A_{\text{out}}(w_i, w_j)$$
+> **T*  =  argmax [T ∈ 𝒯_ROOT]  Σ [(j → i) ∈ T]  A_out(wᵢ, wⱼ)**
 
-where edge $j \to i$ means word $j$ is the *head* of word $i$, and the ROOT edges use actual [CLS] attention rather than synthetic heuristics. This optimisation is solved exactly in $O(n^2)$ time by the Chu-Liu/Edmonds algorithm (Chu & Liu, 1965; Edmonds, 1967), implemented via `networkx.minimum_spanning_arborescence` with negated weights.
+where edge j → i means word *j* is the *head* of word *i*, and the ROOT edges use actual [CLS] attention rather than synthetic heuristics. This optimisation is solved exactly in O(n²) time by the Chu-Liu/Edmonds algorithm (Chu & Liu, 1965; Edmonds, 1967), implemented via `networkx.minimum_spanning_arborescence` with negated weights.
 
 If the arborescence algorithm fails (a rare edge case), a language-agnostic fallback assigns each word its highest-attention head and dynamically selects the ROOT as the word with strongest attention to [CLS] — avoiding any hardcoded word-order assumptions that would bias results for non-SVO languages.
 
 ### 3.4 Stability Evaluation
 
-**Incremental Edge Change (IEC).** For prefix trees $T_{t-1}$ (length $t{-}1$) and $T_t$ (length $t$), IEC measures the fraction of the first $t{-}1$ words whose head changed:
+**Incremental Edge Change (IEC).** For prefix trees T_(t−1) (length t−1) and T_t (length t), IEC measures the fraction of the first t−1 words whose head changed:
 
-$$\text{IEC}(t) \;=\; \frac{\bigl|\{i \in \{0,\ldots,t{-}2\} \;:\; \text{head}_{T_t}(i) \neq \text{head}_{T_{t-1}}(i)\}\bigr|}{t - 1}$$
+> **IEC(t)  =  |{ i ∈ {0, …, t−2} : head_T_t(i) ≠ head_T_(t−1)(i) }|  /  (t − 1)**
 
 IEC = 0 means perfect stability; IEC = 1 means every head reassigned.
 
 **Tree Depth Change.** We also record the absolute change in tree depth:
 
-$$\Delta d(t) \;=\; |d(T_t) - d(T_{t-1})|$$
+> **Δd(t)  =  | d(T_t) − d(T_(t−1)) |**
 
-**Random Baseline.** For each prefix length $t$, we independently generate a random recursive tree on $t$ nodes (each node $i \geq 1$ chooses its parent uniformly from $\{0, \ldots, i{-}1\}$) and compute IEC between consecutive random trees. We average over 200 Monte-Carlo trials. Because the random trees at lengths $t$ and $t{-}1$ are *independent*, this represents the maximum-volatility null hypothesis.
+**Random Baseline.** For each prefix length *t*, we independently generate a random recursive tree on *t* nodes (each node i ≥ 1 chooses its parent uniformly from {0, …, i−1}) and compute IEC between consecutive random trees. We average over 200 Monte-Carlo trials. Because the random trees at lengths *t* and *t*−1 are *independent*, this represents the maximum-volatility null hypothesis.
 
 **Gold-Tree Reference.** We also compute IEC for gold UD trees restricted to each prefix. If a word's gold head falls outside the prefix, it is reattached to ROOT.
 
-**Statistical Inference.** We compare LLM and random IEC distributions using a paired $t$-test and report Cohen's $d$ for effect size.
+**Statistical Inference.** We compare LLM and random IEC distributions using a paired *t*-test and report Cohen's *d* for effect size.
 
 **Unlabeled Attachment Score (UAS).** As a sanity check, we compute UAS for the full-sentence attention-derived tree against the gold UD tree.
 
@@ -115,7 +115,7 @@ We report results across all four languages using the middle layers (layers 5–
 
 The IEC curves reveal a clear separation between LLM attention trees and random baselines. For all four languages, the mean LLM IEC ranges from 0.187 to 0.230, while the random baseline remains at approximately 0.553 — a gap of over 0.32 IEC units. As prefix length grows, the LLM IEC decreases, indicating that early structural commitments are increasingly preserved.
 
-This confirms **H₁**: as the sentence grows, the attention-derived tree structure stabilises. It also confirms **H₂**: the LLM stability is significantly greater than random ($p < 0.001$ for all languages, indicating large effect sizes).
+This confirms **H₁**: as the sentence grows, the attention-derived tree structure stabilises. It also confirms **H₂**: the LLM stability is significantly greater than random (p < 0.001 for all languages, indicating large effect sizes).
 
 Gold UD tree IEC values (English only) are the lowest, confirming that real dependency trees are inherently stable under prefixing and placing the LLM curves between the random baseline and the gold standard.
 
@@ -223,7 +223,7 @@ The code implements all three stages described in §3 and generates the four fig
 2. **Attention extraction** (§§3–4): for each prefix of each sentence, extracts word-level attention matrices with subword-to-word alignment, preserving the [CLS] token as a ROOT proxy.
 3. **Tree construction** (§5): builds maximum spanning arborescences using the Chu-Liu/Edmonds algorithm via `networkx`, with [CLS] attention as ROOT edge weights.
 4. **Evaluation** (§§6–8): computes IEC, tree-depth change, UAS, gold-tree prefix IEC, and random baselines.
-5. **Statistical testing** (§11): paired $t$-test with Cohen's $d$.
+5. **Statistical testing** (§11): paired *t*-test with Cohen's *d*.
 6. **Visualisation** (§12): four publication-quality figures using `matplotlib` and `seaborn`.
 
 **Usage:**
