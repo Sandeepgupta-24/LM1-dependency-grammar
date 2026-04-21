@@ -6,10 +6,11 @@
 
 ## Authors
 
-- Jani Ravi Kailash
-- Aditya Panwar
-- Ishan Trikha
-- Sandeep Kumar Gupta
+- Jani Ravi Kailash (240486)
+- Aditya Panwar (240063)
+- Birkurwar Hitesh (240277)
+- Ishan Trikha (240471)
+- Sandeep Kumar Gupta (240928)
 
 ## Overview
 

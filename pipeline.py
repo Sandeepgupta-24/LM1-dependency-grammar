@@ -8,7 +8,7 @@ heads implicitly learn dependency relations, as measured by the incremental
 structural stability of attention-derived dependency trees across sentence
 prefixes.
 
-Authors : Jani Ravi Kailash, Aditya Panwar, Ishan Trikha, Sandeep Kumar Gupta
+Authors : Jani Ravi Kailash, Aditya Panwar, Birkurwar Hitesh, Ishan Trikha, Sandeep Kumar Gupta
 Course  : Computational Linguistics (CSG)
 Date    : April 2026
 

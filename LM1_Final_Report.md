@@ -1,6 +1,6 @@
 # Do Large Language Models Develop Dependency Grammar? Evidence from Attention-Derived Prefix Trees
 
-**Authors:** Jani Ravi Kailash, Aditya Panwar, Ishan Trikha, Sandeep Kumar Gupta
+**Authors:** Jani Ravi Kailash (240486), Aditya Panwar (240063), Birkurwar Hitesh (240277), Ishan Trikha (240471), Sandeep Kumar Gupta (240928)
 **Course:** Computational Linguistics (CSG) — Final Project  
 **Date:** April 2026
 
@@ -252,7 +252,7 @@ heads implicitly learn dependency relations, as measured by the incremental
 structural stability of attention-derived dependency trees across sentence
 prefixes.
 
-Authors : Jani Ravi Kailash, Aditya Panwar, Ishan Trikha, Sandeep Kumar Gupta
+Authors : Jani Ravi Kailash, Aditya Panwar, Birkurwar Hitesh, Ishan Trikha, Sandeep Kumar Gupta
 Course  : Computational Linguistics (CSG)
 Date    : April 2026
 
